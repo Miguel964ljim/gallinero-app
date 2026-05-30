@@ -1,23 +1,30 @@
+import { useApp } from '../../context/AppContext';
+
 const MORE_ITEMS = [
-  { id: 'alimentacion', label: 'Alimentación',   emoji: '🌾' },
-  { id: 'sanidad',      label: 'Sanidad',         emoji: '💉' },
-  { id: 'mortalidad',   label: 'Bajas',           emoji: '📋' },
-  { id: 'gastos',       label: 'Gastos',          emoji: '💸' },
-  { id: 'configuracion',label: 'Configuración',   emoji: '⚙️' },
-  { id: 'sensores',     label: 'Sensores / IoT',  emoji: '📡' },
+  { id: 'alimentacion',  label: 'Alimentación',  emoji: '🌾' },
+  { id: 'sanidad',       label: 'Sanidad',        emoji: '💉' },
+  { id: 'mortalidad',    label: 'Bajas',          emoji: '📋' },
+  { id: 'gastos',        label: 'Gastos',         emoji: '💸' },
+  { id: 'clientes',      label: 'Clientes',       emoji: '👥' },
+  { id: 'sensores',      label: 'Sensores / IoT', emoji: '📡' },
+  { id: 'configuracion', label: 'Configuración',  emoji: '⚙️', adminOnly: true },
 ];
 
 export default function MoreMenu({ onNavigate, onClose }) {
+  const { isAdmin } = useApp();
+  const items = MORE_ITEMS.filter((i) => !i.adminOnly || isAdmin);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
       <div
         className="w-full bg-white rounded-t-3xl shadow-2xl p-4 pb-safe"
         onClick={(e) => e.stopPropagation()}
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 16px)' }}
       >
         <div className="w-10 h-1 bg-stone-200 rounded-full mx-auto mb-4" />
         <p className="text-xs font-semibold text-stone-400 uppercase tracking-wider px-2 mb-3">Más módulos</p>
         <div className="grid grid-cols-3 gap-3">
-          {MORE_ITEMS.map((item) => (
+          {items.map((item) => (
             <button
               key={item.id}
               onClick={() => { onNavigate(item.id); onClose(); }}

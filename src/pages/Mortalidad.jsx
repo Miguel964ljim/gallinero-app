@@ -1,49 +1,57 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { getItem, setItem, KEYS } from '../utils/storage';
-import { todayISO, fmtDate, uid } from '../utils/dates';
+import { collection, query, orderBy, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { todayISO, fmtDate } from '../utils/dates';
 import { useApp } from '../context/AppContext';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 
+const q = query(collection(db, 'mortalidad'), orderBy('fecha', 'desc'));
 const CAUSAS = ['muerte natural', 'enfermedad', 'accidente', 'vendida'];
 const CAUSA_EMOJI = { 'muerte natural': '💀', enfermedad: '🤒', accidente: '⚡', vendida: '💰' };
-
 const EMPTY = { fecha: '', causa: 'muerte natural', cantidad: '1', notas: '' };
 
 export default function Mortalidad() {
-  const { config, toast } = useApp();
-  const [records, setRecords] = useState(() => getItem(KEYS.MORTALIDAD, []));
-  const [form, setForm] = useState({ ...EMPTY, fecha: todayISO() });
+  const { config, isAdmin, toast } = useApp();
+  const [records, setRecords] = useState([]);
+  const [form, setForm]       = useState({ ...EMPTY, fecha: todayISO() });
   const [confirmId, setConfirmId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm]   = useState(false);
 
-  useEffect(() => setItem(KEYS.MORTALIDAD, records), [records]);
+  useEffect(() => onSnapshot(q, (s) => setRecords(s.docs.map(d => ({ id: d.id, ...d.data() })))), []);
 
-  const totalBajas = useMemo(() => records.reduce((s, r) => s + (r.cantidad || 1), 0), [records]);
-  const gallinasActivas = config.gallinasIniciales - totalBajas;
+  const totalBajas    = useMemo(() => records.reduce((s, r) => s + (r.cantidad || 1), 0), [records]);
+  const gallinasActivas = (config.gallinasIniciales || 36) - totalBajas;
 
-  const save = useCallback(() => {
+  const save = useCallback(async () => {
     const cantidad = Number(form.cantidad);
     if (!cantidad || cantidad <= 0) { toast('Ingresa una cantidad válida', 'error'); return; }
-    if (cantidad > gallinasActivas) { toast('No hay suficientes gallinas activas', 'error'); return; }
-    const rec = { ...form, id: uid(), fecha: form.fecha || todayISO(), cantidad };
-    setRecords((prev) => [rec, ...prev]);
-    setForm({ ...EMPTY, fecha: todayISO() });
-    setShowForm(false);
-    toast('Baja registrada');
+    if (cantidad > gallinasActivas)  { toast('No hay suficientes gallinas activas', 'error'); return; }
+    try {
+      await addDoc(collection(db, 'mortalidad'), {
+        fecha:    form.fecha || todayISO(),
+        causa:    form.causa,
+        cantidad,
+        notas:    form.notas,
+        creadoEn: serverTimestamp(),
+      });
+      setForm({ ...EMPTY, fecha: todayISO() });
+      setShowForm(false);
+      toast('Baja registrada');
+    } catch { toast('Error al guardar', 'error'); }
   }, [form, gallinasActivas, toast]);
 
-  const remove = useCallback((id) => {
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+  const remove = useCallback(async (id) => {
+    try { await deleteDoc(doc(db, 'mortalidad', id)); toast('Registro eliminado', 'warning'); }
+    catch { toast('Error al eliminar', 'error'); }
     setConfirmId(null);
-    toast('Registro eliminado', 'warning');
   }, [toast]);
 
-  const bycausa = useMemo(() => {
-    return CAUSAS.map((c) => ({
+  const bycausa = useMemo(() =>
+    CAUSAS.map((c) => ({
       causa: c,
       total: records.filter((r) => r.causa === c).reduce((s, r) => s + (r.cantidad || 1), 0),
-    }));
-  }, [records]);
+    })),
+  [records]);
 
   return (
     <div className="px-4 pt-4 pb-2 space-y-4">
@@ -55,14 +63,12 @@ export default function Mortalidad() {
         </button>
       </div>
 
-      {/* Conteo de gallinas */}
       <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl p-5 text-white">
         <p className="text-sm opacity-90">Gallinas activas</p>
         <p className="text-5xl font-bold">{gallinasActivas}</p>
-        <p className="text-sm opacity-75">de {config.gallinasIniciales} iniciales · {totalBajas} bajas totales</p>
+        <p className="text-sm opacity-75">de {config.gallinasIniciales || 36} iniciales · {totalBajas} bajas totales</p>
       </div>
 
-      {/* Por causa */}
       <div className="grid grid-cols-2 gap-3">
         {bycausa.map((c) => (
           <div key={c.causa} className="bg-white rounded-2xl shadow-sm border border-stone-100 p-3">
@@ -73,7 +79,6 @@ export default function Mortalidad() {
         ))}
       </div>
 
-      {/* Formulario */}
       {showForm && (
         <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-4 space-y-3">
           <p className="font-semibold text-stone-700">Nueva baja</p>
@@ -81,21 +86,18 @@ export default function Mortalidad() {
             <div>
               <label className="text-xs text-stone-500 font-medium">Fecha</label>
               <input type="date" value={form.fecha}
-                onChange={(e) => setForm((f) => ({ ...f, fecha: e.target.value }))}
-                className="input mt-0.5" />
+                onChange={(e) => setForm((f) => ({ ...f, fecha: e.target.value }))} className="input mt-0.5" />
             </div>
             <div>
               <label className="text-xs text-stone-500 font-medium">Cantidad</label>
               <input type="number" min="1" value={form.cantidad}
-                onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))}
-                className="input mt-0.5" />
+                onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} className="input mt-0.5" />
             </div>
           </div>
           <div>
             <label className="text-xs text-stone-500 font-medium">Causa</label>
             <select value={form.causa}
-              onChange={(e) => setForm((f) => ({ ...f, causa: e.target.value }))}
-              className="input mt-0.5">
+              onChange={(e) => setForm((f) => ({ ...f, causa: e.target.value }))} className="input mt-0.5">
               {CAUSAS.map((c) => (
                 <option key={c} value={c}>{CAUSA_EMOJI[c]} {c.charAt(0).toUpperCase() + c.slice(1)}</option>
               ))}
@@ -104,8 +106,7 @@ export default function Mortalidad() {
           <div>
             <label className="text-xs text-stone-500 font-medium">Notas</label>
             <input type="text" value={form.notas} placeholder="Descripción..."
-              onChange={(e) => setForm((f) => ({ ...f, notas: e.target.value }))}
-              className="input mt-0.5" />
+              onChange={(e) => setForm((f) => ({ ...f, notas: e.target.value }))} className="input mt-0.5" />
           </div>
           <div className="flex gap-2">
             <button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-sm">Cancelar</button>
@@ -114,10 +115,14 @@ export default function Mortalidad() {
         </div>
       )}
 
-      {/* Historial */}
       <div className="space-y-2">
         <p className="text-xs font-semibold text-stone-400 uppercase tracking-wider">Historial de bajas</p>
-        {records.length === 0 && <p className="text-center text-stone-400 py-8">Sin bajas registradas</p>}
+        {records.length === 0 && (
+          <div className="flex flex-col items-center gap-3 py-10">
+            <span className="text-5xl">📋</span>
+            <p className="text-stone-400 text-sm">Sin bajas registradas</p>
+          </div>
+        )}
         {records.map((r) => (
           <div key={r.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 px-4 py-3 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center text-lg flex-shrink-0">
@@ -128,7 +133,9 @@ export default function Mortalidad() {
               <p className="text-xs text-stone-400">{fmtDate(r.fecha)} · {r.cantidad} {r.cantidad === 1 ? 'gallina' : 'gallinas'}</p>
               {r.notas && <p className="text-xs text-stone-500">{r.notas}</p>}
             </div>
-            <button onClick={() => setConfirmId(r.id)} className="text-stone-300 text-xl px-1 active:text-red-400">×</button>
+            {isAdmin && (
+              <button onClick={() => setConfirmId(r.id)} className="text-stone-300 text-xl px-1 active:text-red-400">×</button>
+            )}
           </div>
         ))}
       </div>

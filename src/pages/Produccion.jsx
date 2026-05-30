@@ -1,54 +1,66 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getItem, setItem, KEYS } from '../utils/storage';
-import { todayISO, fmtDate, uid, isSameDay } from '../utils/dates';
+import { collection, query, orderBy, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { todayISO, fmtDate, isSameDay } from '../utils/dates';
 import { useApp } from '../context/AppContext';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 
-const EMPTY_FORM = { fecha: '', turno: 'mañana', cantidad: '', usuario: '', notas: '' };
+const q = query(collection(db, 'produccion'), orderBy('fecha', 'desc'));
+const EMPTY = { fecha: '', turno: 'mañana', cantidad: '', usuario: '', notas: '' };
 
 export default function Produccion() {
-  const { config, toast } = useApp();
-  const [records, setRecords] = useState(() => getItem(KEYS.PRODUCCION, []));
-  const [form, setForm] = useState({ ...EMPTY_FORM, fecha: todayISO(), usuario: config.usuarios[0] });
+  const { config, isAdmin, toast } = useApp();
+  const [records, setRecords] = useState([]);
+  const [form, setForm]       = useState({ ...EMPTY, fecha: todayISO() });
   const [confirmId, setConfirmId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm]   = useState(false);
 
-  useEffect(() => setItem(KEYS.PRODUCCION, records), [records]);
+  useEffect(() => onSnapshot(q, (s) => setRecords(s.docs.map(d => ({ id: d.id, ...d.data() })))), []);
 
-  const save = useCallback(() => {
-    if (!form.cantidad || isNaN(Number(form.cantidad)) || Number(form.cantidad) < 0) {
-      toast('Ingresa una cantidad válida', 'error');
-      return;
-    }
-    const rec = { ...form, id: uid(), cantidad: Number(form.cantidad), fecha: form.fecha || todayISO() };
-    setRecords((prev) => [rec, ...prev]);
-    setForm({ ...EMPTY_FORM, fecha: todayISO(), usuario: config.usuarios[0] });
-    setShowForm(false);
-    toast('Producción registrada ✓');
+  // Sync first user into form when config loads
+  useEffect(() => {
+    if (config?.usuarios?.[0] && !form.usuario)
+      setForm((f) => ({ ...f, usuario: config.usuarios[0] }));
+  }, [config]);
+
+  const save = useCallback(async () => {
+    const n = Number(form.cantidad);
+    if (!n || n < 0) { toast('Ingresa una cantidad válida', 'error'); return; }
+    try {
+      await addDoc(collection(db, 'produccion'), {
+        fecha:    form.fecha || todayISO(),
+        turno:    form.turno,
+        cantidad: n,
+        usuario:  form.usuario,
+        notas:    form.notas,
+        creadoEn: serverTimestamp(),
+      });
+      setForm({ ...EMPTY, fecha: todayISO(), usuario: config?.usuarios?.[0] || '' });
+      setShowForm(false);
+      toast('Producción registrada ✓');
+    } catch { toast('Error al guardar', 'error'); }
   }, [form, config, toast]);
 
-  const remove = useCallback((id) => {
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+  const remove = useCallback(async (id) => {
+    try { await deleteDoc(doc(db, 'produccion', id)); toast('Registro eliminado', 'warning'); }
+    catch { toast('Error al eliminar', 'error'); }
     setConfirmId(null);
-    toast('Registro eliminado', 'warning');
   }, [toast]);
 
-  const todayRecords = records.filter((r) => isSameDay(r.fecha, todayISO()));
+  const today = todayISO();
+  const todayRecords = records.filter((r) => isSameDay(r.fecha, today));
   const totalHoy = todayRecords.reduce((s, r) => s + r.cantidad, 0);
 
   return (
     <div className="px-4 pt-4 pb-2 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-stone-800">Producción 🥚</h2>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          className="bg-brand-500 text-white text-sm font-semibold px-4 py-2 rounded-2xl active:bg-brand-600"
-        >
+        <button onClick={() => setShowForm((v) => !v)}
+          className="bg-brand-500 text-white text-sm font-semibold px-4 py-2 rounded-2xl active:bg-brand-600">
           + Registrar
         </button>
       </div>
 
-      {/* Resumen del día */}
       <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl p-4 text-white">
         <p className="text-sm font-medium opacity-90">Total hoy</p>
         <p className="text-5xl font-bold">{totalHoy}</p>
@@ -65,7 +77,6 @@ export default function Produccion() {
         </div>
       </div>
 
-      {/* Formulario */}
       {showForm && (
         <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-4 space-y-3">
           <p className="font-semibold text-stone-700">Nuevo registro</p>
@@ -98,7 +109,7 @@ export default function Produccion() {
               <select value={form.usuario}
                 onChange={(e) => setForm((f) => ({ ...f, usuario: e.target.value }))}
                 className="input mt-0.5">
-                {config.usuarios.map((u) => <option key={u}>{u}</option>)}
+                {(config?.usuarios || []).map((u) => <option key={u}>{u}</option>)}
               </select>
             </div>
           </div>
@@ -110,22 +121,24 @@ export default function Produccion() {
           </div>
           <div className="flex gap-2 pt-1">
             <button onClick={() => setShowForm(false)}
-              className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-sm font-medium active:bg-stone-50">
+              className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-sm font-medium">
               Cancelar
             </button>
             <button onClick={save}
-              className="flex-1 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-semibold active:bg-brand-600">
+              className="flex-1 py-2.5 rounded-xl bg-brand-500 text-white text-sm font-semibold">
               Guardar
             </button>
           </div>
         </div>
       )}
 
-      {/* Historial */}
       <div className="space-y-2">
         <p className="text-xs font-semibold text-stone-400 uppercase tracking-wider">Historial</p>
         {records.length === 0 && (
-          <p className="text-center text-stone-400 py-8">Sin registros aún</p>
+          <div className="flex flex-col items-center gap-3 py-10">
+            <span className="text-5xl">🥚</span>
+            <p className="text-stone-400 text-sm">Sin registros aún</p>
+          </div>
         )}
         {records.map((r) => (
           <div key={r.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 px-4 py-3 flex items-center gap-3">
@@ -142,7 +155,9 @@ export default function Produccion() {
                 {r.notas ? ` · ${r.notas}` : ''}
               </p>
             </div>
-            <button onClick={() => setConfirmId(r.id)} className="text-stone-300 text-xl px-1 active:text-red-400">×</button>
+            {isAdmin && (
+              <button onClick={() => setConfirmId(r.id)} className="text-stone-300 text-xl px-1 active:text-red-400">×</button>
+            )}
           </div>
         ))}
       </div>

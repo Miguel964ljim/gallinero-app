@@ -1,55 +1,59 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { getItem, setItem, KEYS } from '../utils/storage';
-import { todayISO, fmtDate, uid, isSameWeek, isSameMonth } from '../utils/dates';
+import { collection, query, orderBy, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { todayISO, fmtDate, isSameWeek, isSameMonth } from '../utils/dates';
 import { useApp } from '../context/AppContext';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 
+const q = query(collection(db, 'gastos'), orderBy('fecha', 'desc'));
 const CATEGORIAS = ['alimento', 'medicamento', 'servicios', 'otros'];
-const CAT_EMOJI = { alimento: '🌾', medicamento: '💊', servicios: '🔧', otros: '📌' };
-
+const CAT_EMOJI  = { alimento: '🌾', medicamento: '💊', servicios: '🔧', otros: '📌' };
 const EMPTY = { fecha: '', categoria: 'alimento', monto: '', descripcion: '' };
 
 export default function Gastos() {
-  const { toast } = useApp();
-  const [records, setRecords] = useState(() => getItem(KEYS.GASTOS, []));
-  const [form, setForm] = useState({ ...EMPTY, fecha: todayISO() });
+  const { isAdmin, toast } = useApp();
+  const [records, setRecords] = useState([]);
+  const [form, setForm]       = useState({ ...EMPTY, fecha: todayISO() });
   const [confirmId, setConfirmId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm]   = useState(false);
   const [filtro, setFiltro] = useState('mes');
 
-  useEffect(() => setItem(KEYS.GASTOS, records), [records]);
+  useEffect(() => onSnapshot(q, (s) => setRecords(s.docs.map(d => ({ id: d.id, ...d.data() })))), []);
 
-  const save = useCallback(() => {
+  const save = useCallback(async () => {
     if (!form.monto || Number(form.monto) <= 0) { toast('Ingresa un monto válido', 'error'); return; }
     if (!form.descripcion.trim()) { toast('Agrega una descripción', 'error'); return; }
-    const rec = { ...form, id: uid(), fecha: form.fecha || todayISO(), monto: Number(form.monto) };
-    setRecords((prev) => [rec, ...prev]);
-    setForm({ ...EMPTY, fecha: todayISO() });
-    setShowForm(false);
-    toast('Gasto registrado ✓');
+    try {
+      await addDoc(collection(db, 'gastos'), {
+        fecha:       form.fecha || todayISO(),
+        categoria:   form.categoria,
+        monto:       Number(form.monto),
+        descripcion: form.descripcion.trim(),
+        creadoEn:    serverTimestamp(),
+      });
+      setForm({ ...EMPTY, fecha: todayISO() });
+      setShowForm(false);
+      toast('Gasto registrado ✓');
+    } catch { toast('Error al guardar', 'error'); }
   }, [form, toast]);
 
-  const remove = useCallback((id) => {
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+  const remove = useCallback(async (id) => {
+    try { await deleteDoc(doc(db, 'gastos', id)); toast('Gasto eliminado', 'warning'); }
+    catch { toast('Error al eliminar', 'error'); }
     setConfirmId(null);
-    toast('Gasto eliminado', 'warning');
   }, [toast]);
 
   const filtered = useMemo(() => {
-    return records.filter((r) => {
-      if (filtro === 'semana') return isSameWeek(r.fecha);
-      return isSameMonth(r.fecha);
-    });
+    return records.filter((r) => filtro === 'semana' ? isSameWeek(r.fecha) : isSameMonth(r.fecha));
   }, [records, filtro]);
 
-  const totalPeriodo = filtered.reduce((s, r) => s + r.monto, 0);
+  const totalPeriodo = filtered.reduce((s, r) => s + (r.monto || 0), 0);
 
-  const porCategoria = useMemo(() => {
-    return CATEGORIAS.map((cat) => ({
-      cat,
-      total: filtered.filter((r) => r.categoria === cat).reduce((s, r) => s + r.monto, 0),
-    })).filter((c) => c.total > 0);
-  }, [filtered]);
+  const porCategoria = useMemo(() =>
+    CATEGORIAS
+      .map((cat) => ({ cat, total: filtered.filter((r) => r.categoria === cat).reduce((s, r) => s + r.monto, 0) }))
+      .filter((c) => c.total > 0),
+  [filtered]);
 
   return (
     <div className="px-4 pt-4 pb-2 space-y-4">
@@ -61,25 +65,20 @@ export default function Gastos() {
         </button>
       </div>
 
-      {/* Filtro */}
       <div className="flex bg-stone-100 rounded-2xl p-1 gap-1">
-        {[['semana', 'Esta semana'], ['mes', 'Este mes']].map(([k, l]) => (
+        {[['semana','Esta semana'],['mes','Este mes']].map(([k,l]) => (
           <button key={k} onClick={() => setFiltro(k)}
             className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-colors
-              ${filtro === k ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>
-            {l}
-          </button>
+              ${filtro === k ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500'}`}>{l}</button>
         ))}
       </div>
 
-      {/* Resumen */}
       <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl p-4 text-white">
         <p className="text-sm opacity-90">Total {filtro === 'semana' ? 'esta semana' : 'este mes'}</p>
         <p className="text-4xl font-bold">${totalPeriodo.toFixed(2)}</p>
         <p className="text-sm opacity-75">{filtered.length} gastos</p>
       </div>
 
-      {/* Por categoría */}
       {porCategoria.length > 0 && (
         <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-4">
           <p className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3">Por categoría</p>
@@ -102,7 +101,6 @@ export default function Gastos() {
         </div>
       )}
 
-      {/* Formulario */}
       {showForm && (
         <div className="bg-white rounded-2xl shadow-sm border border-stone-100 p-4 space-y-3">
           <p className="font-semibold text-stone-700">Nuevo gasto</p>
@@ -110,14 +108,12 @@ export default function Gastos() {
             <div>
               <label className="text-xs text-stone-500 font-medium">Fecha</label>
               <input type="date" value={form.fecha}
-                onChange={(e) => setForm((f) => ({ ...f, fecha: e.target.value }))}
-                className="input mt-0.5" />
+                onChange={(e) => setForm((f) => ({ ...f, fecha: e.target.value }))} className="input mt-0.5" />
             </div>
             <div>
               <label className="text-xs text-stone-500 font-medium">Monto ($)</label>
               <input type="number" min="0" step="0.01" value={form.monto} placeholder="0.00"
-                onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))}
-                className="input mt-0.5" />
+                onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} className="input mt-0.5" />
             </div>
           </div>
           <div>
@@ -135,8 +131,7 @@ export default function Gastos() {
           <div>
             <label className="text-xs text-stone-500 font-medium">Descripción</label>
             <input type="text" value={form.descripcion} placeholder="¿En qué se gastó?"
-              onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))}
-              className="input mt-0.5" />
+              onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} className="input mt-0.5" />
           </div>
           <div className="flex gap-2">
             <button onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-sm">Cancelar</button>
@@ -145,10 +140,14 @@ export default function Gastos() {
         </div>
       )}
 
-      {/* Lista */}
       <div className="space-y-2">
         <p className="text-xs font-semibold text-stone-400 uppercase tracking-wider">Detalle</p>
-        {filtered.length === 0 && <p className="text-center text-stone-400 py-8">Sin gastos en este período</p>}
+        {filtered.length === 0 && (
+          <div className="flex flex-col items-center gap-3 py-10">
+            <span className="text-5xl">💸</span>
+            <p className="text-stone-400 text-sm">Sin gastos en este período</p>
+          </div>
+        )}
         {filtered.map((r) => (
           <div key={r.id} className="bg-white rounded-2xl shadow-sm border border-stone-100 px-4 py-3 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center text-lg flex-shrink-0">
@@ -159,8 +158,10 @@ export default function Gastos() {
               <p className="text-xs text-stone-400">{fmtDate(r.fecha)} · {r.categoria}</p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-stone-800">${r.monto.toFixed(2)}</span>
-              <button onClick={() => setConfirmId(r.id)} className="text-stone-300 text-xl px-0.5 active:text-red-400">×</button>
+              <span className="font-bold text-stone-800">${(r.monto || 0).toFixed(2)}</span>
+              {isAdmin && (
+                <button onClick={() => setConfirmId(r.id)} className="text-stone-300 text-xl px-0.5 active:text-red-400">×</button>
+              )}
             </div>
           </div>
         ))}
