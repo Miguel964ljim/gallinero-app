@@ -5,7 +5,7 @@ import { auth, db } from '../firebase';
 import { todayISO, lastNDays, fmtDateShort, isSameDay, isSameMonth } from '../utils/dates';
 import { useApp } from '../context/AppContext';
 import BarChart from '../components/charts/BarChart';
-import logo from '../assets/logo.png';
+import logo from '../assets/logo.PNG';
 
 const qProd  = query(collection(db, 'produccion'),  orderBy('fecha', 'desc'));
 const qVentas = query(collection(db, 'ventas'),     orderBy('fecha', 'desc'));
